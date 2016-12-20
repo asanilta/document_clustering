@@ -10,7 +10,7 @@ from sklearn.preprocessing import Normalizer
 from sklearn import metrics
 from sklearn.neighbors import kneighbors_graph
 
-from sklearn.cluster import KMeans, MiniBatchKMeans, AgglomerativeClustering, SpectralClustering
+from sklearn.cluster import KMeans, MiniBatchKMeans, AgglomerativeClustering, SpectralClustering, DBSCAN, AffinityPropagation, Birch
 
 import logging
 from optparse import OptionParser
@@ -56,6 +56,7 @@ if len(args) > 0:
 
 
 ###############################################################################
+# Create Dataset and Extract Features
 
 labels = []
 target_names = []
@@ -79,155 +80,150 @@ print()
 
 true_k = np.unique(labels).shape[0]
 
-print("Extracting features from the training dataset using a sparse vectorizer")
 t0 = time()
-if opts.use_hashing:
-    if opts.use_idf:
-        # Perform an IDF normalization on the output of HashingVectorizer
-        hasher = HashingVectorizer(n_features=opts.n_features,
-                                   stop_words='english', non_negative=True,
-                                   norm=None, binary=False)
-        vectorizer = make_pipeline(hasher, TfidfTransformer())
-    else:
-        vectorizer = HashingVectorizer(n_features=opts.n_features,
-                                       stop_words='english',
-                                       non_negative=False, norm='l2',
-                                       binary=False)
-else:
-    vectorizer = TfidfVectorizer(max_df=0.8, max_features=opts.n_features,
+tfidfVectorizer = TfidfVectorizer(max_df=0.8, max_features=1000,
                                  min_df=2, stop_words='english',
-                                 use_idf=opts.use_idf)
-X = vectorizer.fit_transform(data)
+                                 use_idf=True)
+tfidf = tfidfVectorizer.fit_transform(data)
 
+print("TF*IDF")
 print("done in %fs" % (time() - t0))
-print("n_samples: %d, n_features: %d" % X.shape)
+print("n_samples: %d, n_features: %d" % tfidf.shape)
+print()
 print()
 
-if opts.n_components:
-    print("Performing dimensionality reduction using LSA")
-    t0 = time()
-    # Vectorizer results are normalized, which makes KMeans behave as
-    # spherical k-means for better results. Since LSA/SVD results are
-    # not normalized, we have to redo the normalization.
-    svd = TruncatedSVD(opts.n_components)
-    normalizer = Normalizer(copy=False)
-    lsa = make_pipeline(svd, normalizer)
+t0 = time()
+tfVectorizer = TfidfVectorizer(max_df=0.8, max_features=1000,
+                                 min_df=2, stop_words='english',
+                                 use_idf=False)
+tf = tfVectorizer.fit_transform(data)
 
-    X = lsa.fit_transform(X)
+print("TF")
+print("done in %fs" % (time() - t0))
+print("n_samples: %d, n_features: %d" % tf.shape)
+print()
+print()
 
-    print("done in %fs" % (time() - t0))
+t0 = time()
+binarytfVectorizer = TfidfVectorizer(max_df=0.8, max_features=1000,
+                                 min_df=2, stop_words='english',
+                                 use_idf=True,binary=True)
+binarytf = binarytfVectorizer.fit_transform(data)
 
-    explained_variance = svd.explained_variance_ratio_.sum()
-    print("Explained variance of the SVD step: {}%".format(
-        int(explained_variance * 100)))
+print("(Binary TF)*IDF")
+print("done in %fs" % (time() - t0))
+print("n_samples: %d, n_features: %d" % binarytf.shape)
+print()
+print()
 
-    print()
+binaryVectorizer = TfidfVectorizer(max_df=0.8, max_features=1000,
+                                 min_df=2, stop_words='english',
+                                 use_idf=True,binary=True)
+binary = binaryVectorizer.fit_transform(data)
+
+print("Binary")
+print("done in %fs" % (time() - t0))
+print("n_samples: %d, n_features: %d" % binary.shape)
+print()
+print()
+
+feature_names = ["TF*IDF","TF", "(Binary TF)*IDF", "Binary"]
+features = [tfidf,tf,binarytf,binary]
+vectorizers = [tfidfVectorizer,tfVectorizer,binarytfVectorizer,binaryVectorizer]
+
+# if opts.n_components:
+#     print("Performing dimensionality reduction using LSA")
+#     t0 = time()
+#     # Vectorizer results are normalized, which makes KMeans behave as
+#     # spherical k-means for better results. Since LSA/SVD results are
+#     # not normalized, we have to redo the normalization.
+#     svd = TruncatedSVD(opts.n_components)
+#     normalizer = Normalizer(copy=False)
+#     lsa = make_pipeline(svd, normalizer)
+
+#     X = lsa.fit_transform(X)
+
+#     print("done in %fs" % (time() - t0))
+
+#     explained_variance = svd.explained_variance_ratio_.sum()
+#     print("Explained variance of the SVD step: {}%".format(
+#         int(explained_variance * 100)))
+
+#     print()
 
 
 ###############################################################################
-# Do the actual clustering
+# Clustering Algorithms
 
-print("K-Means")
-if opts.minibatch:
-    km = MiniBatchKMeans(n_clusters=true_k, init='k-means++', n_init=1,
-                         init_size=1000, batch_size=1000, verbose=opts.verbose)
-else:
-    km = KMeans(n_clusters=true_k, init='k-means++', max_iter=100, n_init=1,
-                verbose=opts.verbose)
-
-print("Clustering sparse data with %s" % km)
-t0 = time()
-km.fit(X)
-print("done in %0.3fs" % (time() - t0))
-print()
-
-print("Homogeneity: %0.3f" % metrics.homogeneity_score(labels, km.labels_))
-print("Completeness: %0.3f" % metrics.completeness_score(labels, km.labels_))
-print("V-measure: %0.3f" % metrics.v_measure_score(labels, km.labels_))
-print("Adjusted Rand-Index: %.3f"
-      % metrics.adjusted_rand_score(labels, km.labels_))
-print("Silhouette Coefficient: %0.3f"
-      % metrics.silhouette_score(X, km.labels_, sample_size=1000))
-
-if not opts.use_hashing:
-    print("Top terms per cluster:")
-
-    if opts.n_components:
-        original_space_centroids = svd.inverse_transform(km.cluster_centers_)
-        order_centroids = original_space_centroids.argsort()[:, ::-1]
-    else:
-        order_centroids = km.cluster_centers_.argsort()[:, ::-1]
-
-    terms = vectorizer.get_feature_names()
-    for i in range(true_k):
-        print("Cluster %d:" % i, end='')
-        for ind in order_centroids[i, :10]:
-            print(' %s' % terms[ind], end='')
-        print()
-
-
-print()
-print()
-print("Agglomerative Clustering Ward")
-# connectivity matrix for structured Ward
-connectivity = kneighbors_graph(X, n_neighbors=10, include_self=False)
-# make connectivity symmetric
-connectivity = 0.5 * (connectivity + connectivity.T)
-ward = AgglomerativeClustering(n_clusters=true_k, linkage='ward',
-                                           connectivity=connectivity)
-
-t0 = time()
-ward.fit(X.toarray())
-print("done in %0.3fs" % (time() - t0))
-print()
-
-print("Homogeneity: %0.3f" % metrics.homogeneity_score(labels, ward.labels_))
-print("Completeness: %0.3f" % metrics.completeness_score(labels, ward.labels_))
-print("V-measure: %0.3f" % metrics.v_measure_score(labels, ward.labels_))
-print("Adjusted Rand-Index: %.3f"
-      % metrics.adjusted_rand_score(labels, ward.labels_))
-print("Silhouette Coefficient: %0.3f"
-      % metrics.silhouette_score(X, ward.labels_, sample_size=1000))
-
-
-print()
-print()
-print("Agglomerative Clustering Average Linkage")
-
-avg = AgglomerativeClustering(
-        linkage="average", affinity="cityblock", n_clusters=true_k,
-        connectivity=connectivity)
-t0 = time()
-avg.fit(X.toarray())
-print("done in %0.3fs" % (time() - t0))
-print()
-
-print("Homogeneity: %0.3f" % metrics.homogeneity_score(labels, avg.labels_))
-print("Completeness: %0.3f" % metrics.completeness_score(labels, avg.labels_))
-print("V-measure: %0.3f" % metrics.v_measure_score(labels, avg.labels_))
-print("Adjusted Rand-Index: %.3f"
-      % metrics.adjusted_rand_score(labels, avg.labels_))
-print("Silhouette Coefficient: %0.3f"
-      % metrics.silhouette_score(X, avg.labels_, sample_size=1000))
-
-print()
-print()
-print("Spectral Clustering")
-
+minikm = MiniBatchKMeans(n_clusters=true_k, init='k-means++', max_iter=100, n_init=10,
+                             init_size=1000, batch_size=1000, verbose=opts.verbose, random_state=0)
+km = KMeans(n_clusters=true_k, init='k-means++', max_iter=100, n_init=10,
+                verbose=opts.verbose, random_state=0)
 spectral = SpectralClustering(n_clusters=true_k,
                                           eigen_solver='arpack',
                                           affinity="nearest_neighbors")
+dbscan = DBSCAN(eps=.35)
+birch = Birch(n_clusters=true_k)  
 
-t0 = time()
-spectral.fit(X.toarray())
-print("done in %0.3fs" % (time() - t0))
-print()
+algorithms = [minikm,km,spectral,dbscan,birch]
+algo_names = ["Mini Batch K-Means","K-Means", "Spectral", "DBSCAN", "Birch"]
 
-print("Homogeneity: %0.3f" % metrics.homogeneity_score(labels, spectral.labels_))
-print("Completeness: %0.3f" % metrics.completeness_score(labels, spectral.labels_))
-print("V-measure: %0.3f" % metrics.v_measure_score(labels, spectral.labels_))
-print("Adjusted Rand-Index: %.3f"
-      % metrics.adjusted_rand_score(labels, spectral.labels_))
-print("Silhouette Coefficient: %0.3f"
-      % metrics.silhouette_score(X, spectral.labels_, sample_size=1000))
 
+for algo_name, algo in zip(algo_names,algorithms):
+  for feature_name, feature in zip(feature_names, features):
+    print("Clustering Algorithm: " + algo_name)
+    print("Feature: " + feature_name)    
+    print("Clustering data with %s" % algo)
+    t0 = time()
+    algo.fit(feature)
+    print("done in %0.3fs" % (time() - t0))
+    print()
+    print("Homogeneity: %0.3f" % metrics.homogeneity_score(labels, algo.labels_))
+    print("Completeness: %0.3f" % metrics.completeness_score(labels, algo.labels_))
+    print("V-measure: %0.3f" % metrics.v_measure_score(labels, algo.labels_))
+    print("Adjusted Rand-Index: %.3f"
+          % metrics.adjusted_rand_score(labels, algo.labels_))
+    print("Silhouette Coefficient: %0.3f"
+        % metrics.silhouette_score(feature, algo.labels_, sample_size=1000))
+    print()
+    print()
+
+for feature_name, feature in zip(feature_names, features):
+  # connectivity matrix for structured Ward
+  connectivity = kneighbors_graph(feature, n_neighbors=10, include_self=False)
+  # make connectivity symmetric
+  connectivity = 0.5 * (connectivity + connectivity.T)
+  algo = AgglomerativeClustering(n_clusters=true_k, linkage='ward',connectivity=connectivity)
+  print("Clustering Algorithm: Agglomerative (Ward)")
+  print("Feature: " + feature_name)    
+  print("Clustering data with %s" % algo)
+  t0 = time()
+  algo.fit(feature.toarray())
+  print("done in %0.3fs" % (time() - t0))
+  print()
+  print("Homogeneity: %0.3f" % metrics.homogeneity_score(labels, algo.labels_))
+  print("Completeness: %0.3f" % metrics.completeness_score(labels, algo.labels_))
+  print("V-measure: %0.3f" % metrics.v_measure_score(labels, algo.labels_))
+  print("Adjusted Rand-Index: %.3f"
+        % metrics.adjusted_rand_score(labels, algo.labels_))
+  print("Silhouette Coefficient: %0.3f"
+      % metrics.silhouette_score(feature, algo.labels_, sample_size=1000))
+  print()
+  print()
+
+  # print("Top terms per cluster:")
+
+  # if opts.n_components:
+  #     original_space_centroids = svd.inverse_transform(km.cluster_centers_)
+  #     order_centroids = original_space_centroids.argsort()[:, ::-1]
+  # else:
+  #     order_centroids = km.cluster_centers_.argsort()[:, ::-1]
+
+  # terms = vectorizer.get_feature_names()
+  # for i in range(true_k):
+  #     print("Cluster %d:" % i, end='')
+  #     for ind in order_centroids[i, :10]:
+  #         print(' %s' % terms[ind], end='')
+  #     print()
+  # print()
+  # print()
